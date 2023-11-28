@@ -1,4 +1,5 @@
 import datetime
+import enum
 from collections import defaultdict
 
 from flask_marshmallow import Marshmallow
@@ -1069,3 +1070,29 @@ class TeamFieldEntries(FieldEntries):
     team = db.relationship(
         "Teams", foreign_keys="TeamFieldEntries.team_id", back_populates="field_entries"
     )
+
+
+class TeamChallengeState(db.Model):
+    class State(enum.Enum):
+        LOCKED = "LOCKED"
+        SKIPPED = "SKIPPED"
+        SOLVED = "SOLVED"
+
+    __tablename__ = "team_challenge_state"
+    id = db.Column(db.Integer, primary_key=True)
+    team_id = db.Column(db.Integer, db.ForeignKey("teams.id", ondelete="CASCADE"))
+    challenge_id = db.Column(
+        db.Integer, db.ForeignKey("challenges.id", ondelete="CASCADE")
+    )
+    state = db.Column(db.String(80))
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    team = db.relationship(
+        "Teams", foreign_keys="TeamChallengeState.team_id", lazy="joined"
+    )
+    challenge = db.relationship(
+        "Challenges", foreign_keys="TeamChallengeState.challenge_id", lazy="joined"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super(TeamChallengeState, self).__init__(**kwargs)

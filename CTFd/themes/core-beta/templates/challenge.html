@@ -149,7 +149,25 @@
                 {% endblock %}
               </div>
             </div>
+            <div class="row justify-content-center" style="margin-top: 10px">
+                <div class="col-12 col-sm-8">
+                    <p>Type challenge name to skip it.</p>
+                </div>
+                <input type="hidden" value="{{ challenge.name }}" x-model="name">
+                <div class="col-12 col-sm-3 mt-3 mt-sm-0 key-skip">
+                    {% block skip_challenge %}
+                        <button
+                          id="challenge-skip"
+                          x-bind:disabled="!skipInputIsValid()"
+                          class="challenge-submit btn btn-danger w-100 h-100" type="submit"
+                              @click.debounce.500ms="skipChallenge()"
+                      >
+                        {% trans %}Skip{% endtrans %}
+                      </button>
+                    {% endblock %}
 
+                </div>
+            </div>
             <div class="row notification-row">
               <div class="col-12">
                 <template x-if="response">

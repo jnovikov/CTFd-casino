@@ -237,11 +237,13 @@ class ServerConfig(object):
 
     SAFE_MODE: bool = process_boolean_str(empty_str_cast(config_ini["optional"].get("SAFE_MODE", False), default=False))
 
+    SQLALCHEMY_ENGINE_OPTIONS = {"isolation_level": "SERIALIZABLE",}
     if DATABASE_URL.startswith("sqlite") is False:
-        SQLALCHEMY_ENGINE_OPTIONS = {
+        SQLALCHEMY_ENGINE_OPTIONS.update({
             "max_overflow": int(empty_str_cast(config_ini["optional"]["SQLALCHEMY_MAX_OVERFLOW"], default=20)),  # noqa: E131
             "pool_pre_ping": empty_str_cast(config_ini["optional"]["SQLALCHEMY_POOL_PRE_PING"], default=True),  # noqa: E131
-        }
+
+        })
 
     # === OAUTH ===
     OAUTH_CLIENT_ID: str = empty_str_cast(config_ini["oauth"]["OAUTH_CLIENT_ID"])

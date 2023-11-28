@@ -1,3 +1,5 @@
+import datetime
+import random
 from typing import List  # noqa: I001
 
 from flask import abort, render_template, request, url_for
@@ -9,7 +11,7 @@ from CTFd.api.v1.helpers.schemas import sqlalchemy_to_pydantic
 from CTFd.api.v1.schemas import APIDetailedSuccessResponse, APIListSuccessResponse
 from CTFd.cache import clear_challenges, clear_standings
 from CTFd.constants import RawEnum
-from CTFd.models import ChallengeFiles as ChallengeFilesModel
+from CTFd.models import ChallengeFiles as ChallengeFilesModel, TeamChallengeState
 from CTFd.models import Challenges
 from CTFd.models import ChallengeTopics as ChallengeTopicsModel
 from CTFd.models import Fails, Flags, Hints, HintUnlocks, Solves, Submissions, Tags, db
@@ -79,6 +81,15 @@ challenges_namespace.schema_model(
 )
 
 
+def challenge_is_locked(c_state: TeamChallengeState):
+    status = c_state.state
+
+    if status == TeamChallengeState.State.LOCKED.value and c_state.timestamp <= datetime.datetime.utcnow():
+        return True
+
+    return False
+
+
 @challenges_namespace.route("")
 class ChallengeList(Resource):
     @check_challenge_visibility
@@ -89,8 +100,8 @@ class ChallengeList(Resource):
         responses={
             200: ("Success", "ChallengeListSuccessResponse"),
             400: (
-                "An error occured processing the provided or stored data",
-                "APISimpleErrorResponse",
+                    "An error occured processing the provided or stored data",
+                    "APISimpleErrorResponse",
             ),
         },
     )
@@ -104,17 +115,17 @@ class ChallengeList(Resource):
             "state": (str, None),
             "q": (str, None),
             "field": (
-                RawEnum(
-                    "ChallengeFields",
-                    {
-                        "name": "name",
-                        "description": "description",
-                        "category": "category",
-                        "type": "type",
-                        "state": "state",
-                    },
-                ),
-                None,
+                    RawEnum(
+                        "ChallengeFields",
+                        {
+                            "name": "name",
+                            "description": "description",
+                            "category": "category",
+                            "type": "type",
+                            "state": "state",
+                        },
+                    ),
+                    None,
             ),
         },
         location="query",
@@ -144,8 +155,11 @@ class ChallengeList(Resource):
         if authed():
             user = get_current_user()
             user_solves = get_solve_ids_for_user_id(user_id=user.id)
+            status_by_id = {s.challenge_id: s.state for s in
+                            TeamChallengeState.query.filter_by(team_id=user.account_id).all()}
         else:
             user_solves = set()
+            status_by_id = dict()
 
         # Aggregate the query results into the hashes defined at the top of
         # this block for later use
@@ -169,6 +183,7 @@ class ChallengeList(Resource):
         all_challenge_ids = {
             c.id for c in Challenges.query.with_entities(Challenges.id).all()
         }
+
         for challenge in chal_q:
             if challenge.requirements:
                 requirements = challenge.requirements.get("prerequisites", [])
@@ -186,6 +201,8 @@ class ChallengeList(Resource):
                                 "value": 0,
                                 "solves": None,
                                 "solved_by_me": False,
+                                "locked": False,
+                                "skipped": False,
                                 "category": "???",
                                 "tags": [],
                                 "template": "",
@@ -210,6 +227,8 @@ class ChallengeList(Resource):
                     "value": challenge.value,
                     "solves": solve_counts.get(challenge.id, solve_count_dfl),
                     "solved_by_me": challenge.id in user_solves,
+                    "locked": status_by_id.get(challenge.id, "") == TeamChallengeState.State.LOCKED.value,
+                    "skipped": status_by_id.get(challenge.id, "") == TeamChallengeState.State.SKIPPED.value,
                     "category": challenge.category,
                     "tags": tag_schema.dump(challenge.tags).data,
                     "template": challenge_type.templates["view"],
@@ -226,8 +245,8 @@ class ChallengeList(Resource):
         responses={
             200: ("Success", "ChallengeDetailedSuccessResponse"),
             400: (
-                "An error occured processing the provided or stored data",
-                "APISimpleErrorResponse",
+                    "An error occured processing the provided or stored data",
+                    "APISimpleErrorResponse",
             ),
         },
     )
@@ -280,8 +299,8 @@ class Challenge(Resource):
         responses={
             200: ("Success", "ChallengeDetailedSuccessResponse"),
             400: (
-                "An error occured processing the provided or stored data",
-                "APISimpleErrorResponse",
+                    "An error occured processing the provided or stored data",
+                    "APISimpleErrorResponse",
             ),
         },
     )
@@ -362,6 +381,13 @@ class Challenge(Resource):
             else:
                 if config.is_teams_mode() and team is None:
                     abort(403)
+
+            chal_state = TeamChallengeState.query.filter_by(team_id=user.account_id,
+                                                            challenge_id=challenge_id).first()
+            if chal_state is None:
+                abort(403)
+            if chal_state.state != TeamChallengeState.State.SOLVED.value and not challenge_is_locked(chal_state):
+                abort(403)
 
             unlocked_hints = {
                 u.target
@@ -447,8 +473,8 @@ class Challenge(Resource):
         responses={
             200: ("Success", "ChallengeDetailedSuccessResponse"),
             400: (
-                "An error occured processing the provided or stored data",
-                "APISimpleErrorResponse",
+                    "An error occured processing the provided or stored data",
+                    "APISimpleErrorResponse",
             ),
         },
     )
@@ -568,6 +594,11 @@ class ChallengeAttempt(Resource):
             else:
                 abort(403)
 
+        team_state = TeamChallengeState.query.filter_by(team_id=user.account_id,
+                                                        challenge_id=challenge_id).with_for_update().first()
+        if team_state is None or not challenge_is_locked(team_state):
+            abort(403)
+
         chal_class = get_chal_class(challenge.type)
 
         # Anti-bruteforce / submitting Flags too quickly
@@ -621,6 +652,7 @@ class ChallengeAttempt(Resource):
             status, message = chal_class.attempt(challenge, request)
             if status:  # The challenge plugin says the input is right
                 if ctftime() or current_user.is_admin():
+                    team_state.state = TeamChallengeState.State.SOLVED.value
                     chal_class.solve(
                         user=user, team=team, challenge=challenge, request=request
                     )
@@ -697,6 +729,95 @@ class ChallengeAttempt(Resource):
                     "message": "You already solved this",
                 },
             }
+
+
+@challenges_namespace.route("/skip")
+class ChallengeAttempt(Resource):
+    @check_challenge_visibility
+    @during_ctf_time_only
+    @require_verified_emails
+    def post(self):
+        if authed() is False:
+            return {"success": True, "data": {"status": "authentication_required"}}, 403
+
+        if request.content_type != "application/json":
+            request_data = request.form
+        else:
+            request_data = request.get_json()
+
+        challenge_id = request_data.get("challenge_id")
+        submission = request_data.get("submission")
+
+        challenge = Challenges.query.filter_by(id=challenge_id).first_or_404()
+
+        if current_user.is_admin():
+            return {"success": True, "data": {"status": "skipped"}}, 200
+
+        if challenge.name != submission:
+            return {"success": True, "data": {"status": "invalid_name_provided"}}, 400
+
+        user = get_current_user()
+        team_status = TeamChallengeState.query.filter_by(team_id=user.account_id,
+                                                         challenge_id=challenge_id).with_for_update().first()
+        if team_status is None or not challenge_is_locked(team_status):
+            return {"success": True, "data": {"status": "challenge_not_locked"}}, 400
+
+        team_status.state = TeamChallengeState.State.SKIPPED.value
+        db.session.commit()
+        db.session.close()
+        return {"success": True, "data": {"status": "skipped"}}, 200
+
+
+@challenges_namespace.route("/roll")
+class ChallengeRoll(Resource):
+    @during_ctf_time_only
+    @require_verified_emails
+    def post(self):
+        if authed() is False:
+            return {"success": True, "data": {"status": "authentication_required"}}, 403
+
+        user = get_current_user()
+
+        chals = Challenges.query.filter(
+            and_(Challenges.state != "hidden", Challenges.state != "locked")
+        ).all()
+
+        statuses = TeamChallengeState.query.filter(
+            TeamChallengeState.team_id == user.account_id,
+        ).with_for_update().all()
+
+        have_lock = any(status.state == TeamChallengeState.State.LOCKED.value for status in statuses)
+        if have_lock:
+            return {"success": True, "data": {"status": "already_rolled"}}, 403
+
+        statuses = {status.challenge_id: status.state for status in statuses}
+        to_roll = []
+        for chal in chals:
+            if statuses.get(chal.id) == TeamChallengeState.State.SOLVED.value:
+                continue
+            if statuses.get(chal.id) == TeamChallengeState.State.SKIPPED.value:
+                continue
+            to_roll.append(
+                {
+                    "id": chal.id,
+                    "name": chal.name,
+                    "value": chal.value,
+                    "category": chal.category,
+                }
+            )
+        if not to_roll:
+            return {"success": True, "data": {"status": "no_challenges"}}, 403
+
+        chal_id = random.choice(to_roll)["id"]
+        st = TeamChallengeState(team_id=user.account_id,
+                                challenge_id=chal_id,
+                                state=TeamChallengeState.State.LOCKED.value,
+                                timestamp=datetime.datetime.utcnow() + datetime.timedelta(seconds=11))
+        db.session.add(st)
+        db.session.commit()
+        db.session.close()
+
+        return {"success": True, "data": {"status": "rolled", "challenge_id": chal_id, "to_roll": to_roll}}, 200
 
 
 @challenges_namespace.route("/<challenge_id>/solves")

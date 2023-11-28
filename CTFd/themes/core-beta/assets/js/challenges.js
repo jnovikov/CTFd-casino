@@ -1,5 +1,7 @@
 import Alpine from "alpinejs";
 import dayjs from "dayjs";
+import {Wheel} from 'spin-wheel/dist/spin-wheel-esm';
+import {AlignText} from 'spin-wheel/src/constants.js';
 
 import CTFd from "./index";
 
@@ -58,10 +60,12 @@ Alpine.data("Hint", () => ({
 Alpine.data("Challenge", () => ({
   id: null,
   next_id: null,
+  name: "",
   submission: "",
   tab: null,
   solves: [],
   response: null,
+  spinWheel: null,
 
   async init() {
     highlight();
@@ -96,6 +100,7 @@ Alpine.data("Challenge", () => ({
 
   async init() {
     highlight();
+    this.name = Alpine.store("challenge").data.name;
   },
 
   async showChallenge() {
@@ -134,6 +139,25 @@ Alpine.data("Challenge", () => ({
     modal.hide();
   },
 
+  skipInputIsValid() {
+    return this.name === this.submission;
+  },
+
+  async skipChallenge() {
+    let url = `/api/v1/challenges/skip`;
+
+    const response = await CTFd.fetch(url, {
+        method: "POST",
+        body: JSON.stringify({
+            challenge_id: this.id,
+            submission: this.submission,
+        }),
+    });
+    const result = await response.json();
+
+    this.$dispatch("load-challenges");
+  },
+
   async submitChallenge() {
     this.response = await CTFd.pages.challenge.submitChallenge(
       this.id,
@@ -157,10 +181,12 @@ Alpine.data("ChallengeBoard", () => ({
   loaded: false,
   challenges: [],
   challenge: null,
+  openChallenges: [],
+  canRoll: false,
+  isRolling: false,
 
   async init() {
-    this.challenges = await CTFd.pages.challenges.getChallenges();
-    this.loaded = true;
+    await this.loadChallenges();
 
     if (window.location.hash) {
       let chalHash = decodeURIComponent(window.location.hash.substring(1));
@@ -221,8 +247,83 @@ Alpine.data("ChallengeBoard", () => ({
     return challenges;
   },
 
+  getChallengeClass(c) {
+    if (c.locked) {
+      return "challenge-locked";
+    }
+    if (c.skipped) {
+      return "challenge-skipped";
+    }
+    return c.solved_by_me ? 'challenge-solved' : '';
+  },
+
+  async roll() {
+    this.isRolling = true;
+
+    let url = `/api/v1/challenges/roll`;
+    const response = await CTFd.fetch(url, {
+        method: "POST",
+    });
+    if (response.ok) {
+      let data = await response.json();
+      let challenge_id = data.data.challenge_id;
+      let to_roll = data.data.to_roll;
+      let indexInOpen = to_roll.findIndex(challenge => challenge.id === challenge_id);
+      this.createSpinWheel(to_roll);
+      await new Promise(r => setTimeout(r, 1000));
+      let spinTime = 10 * 1000;
+      this.spinWheel.spinToItem(indexInOpen, spinTime, true, 3);
+      await new Promise(r => setTimeout(r, spinTime));
+      this.$dispatch("load-challenges");
+      this.isRolling = false;
+    } else {
+      console.log(response);
+    }
+  },
+
+  createSpinWheel(challenges) {
+    if (!this.spinWheel) {
+      const container = document.querySelector('.wheel-wrapper');
+      this.spinWheel = new Wheel(container, null);
+    }
+
+    const availableColors = ['#ffc93c', '#66bfbf', '#a2d5f2', '#515070', '#43658b', '#ed6663', '#d54062' ];
+    let categories = Array.from(new Set(challenges.map((challenge) => challenge.category)));
+    let items =  challenges.map((challenge) => {
+        return {label: `${challenge.name} (${challenge.category})`};
+      });
+    let colors = [];
+    challenges.forEach((c) => {
+      let colorIndex = categories.indexOf(c.category) % availableColors.length;
+      let color = availableColors[colorIndex];
+      colors.push(color);
+    });
+
+    let props = {
+      radius: 0.84,
+      isInteractive: false,
+      lineWidth: 1,
+      itemLabelRadius: 0.93,
+      itemLabelRadiusMax: 0.35,
+      itemLabelRotation: 180,
+      itemLabelAlign: AlignText.left,
+      itemLabelColors: ['#fff'],
+      itemLabelBaselineOffset: -0.07,
+      overlayImage: 'themes/core-beta/static/img/spin-overlay.svg',
+      items: items,
+      itemBackgroundColors: colors,
+    };
+
+    this.spinWheel.init(props);
+  },
+
   async loadChallenges() {
     this.challenges = await CTFd.pages.challenges.getChallenges();
+    this.loaded = true;
+    this.openChallenges = this.challenges.filter(challenge =>
+        !challenge.solved_by_me && !challenge.skipped && challenge.type !== "hidden"
+    );
+    this.canRoll = this.openChallenges.length > 0 && this.challenges.filter(challenge => challenge.locked).length === 0;
   },
 
   async loadChallenge(challengeId) {
