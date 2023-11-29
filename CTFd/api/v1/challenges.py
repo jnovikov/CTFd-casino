@@ -1,5 +1,6 @@
 import datetime
 import random
+import secrets
 from typing import List  # noqa: I001
 
 from flask import abort, render_template, request, url_for
@@ -384,10 +385,14 @@ class Challenge(Resource):
 
             chal_state = TeamChallengeState.query.filter_by(team_id=user.account_id,
                                                             challenge_id=challenge_id).first()
-            if chal_state is None:
-                abort(403)
-            if chal_state.state != TeamChallengeState.State.SOLVED.value and not challenge_is_locked(chal_state):
-                abort(403)
+
+            if is_admin():
+                pass
+            else:
+                if chal_state is None:
+                    abort(403)
+                if chal_state.state != TeamChallengeState.State.SOLVED.value and not challenge_is_locked(chal_state):
+                    abort(403)
 
             unlocked_hints = {
                 u.target
@@ -808,7 +813,7 @@ class ChallengeRoll(Resource):
         if not to_roll:
             return {"success": True, "data": {"status": "no_challenges"}}, 403
 
-        chal_id = random.choice(to_roll)["id"]
+        chal_id = secrets.choice(to_roll)["id"]
         st = TeamChallengeState(team_id=user.account_id,
                                 challenge_id=chal_id,
                                 state=TeamChallengeState.State.LOCKED.value,
