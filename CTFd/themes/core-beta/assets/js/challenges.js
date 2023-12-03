@@ -287,7 +287,7 @@ Alpine.data("ChallengeBoard", () => ({
       this.spinWheel = new Wheel(container, null);
     }
 
-    const availableColors = ['#86FFBE', '#4B1AC0', '#220074', '#24EE81', '#5E5BFF', '#8482FF', '#9757FF', '#6D17F9', '#BE96FF', '#5722AC'];
+    const availableColors = ['#00B07B', '#4B1AC0', '#220074', '#24EE81', '#5E5BFF', '#8482FF', '#9757FF', '#6D17F9', '#BE96FF', '#5722AC'];
     let categories = Array.from(new Set(challenges.map((challenge) => challenge.category)));
     let items =  challenges.map((challenge) => {
         return {label: `${challenge.name} (${challenge.category})`};
